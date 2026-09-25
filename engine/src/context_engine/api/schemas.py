@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime
 from typing import Annotated, Literal
 
@@ -59,6 +60,8 @@ class IngestionRequest(_ApiModel):
     content_type: Annotated[str | None, Field(max_length=200)] = Field(
         default=None, alias="contentType"
     )
+    content: Annotated[str | None, Field(min_length=1, max_length=1_000_000)] = None
+    title: Annotated[str | None, Field(max_length=1000)] = None
     content_ref: Annotated[str | None, Field(min_length=1, max_length=1000)] = Field(
         default=None, alias="contentRef"
     )
@@ -85,10 +88,17 @@ class IngestionRequest(_ApiModel):
 
         if len(set(self.audience)) != len(self.audience):
             raise ValueError("audience values must be unique")
-        if self.operation == "upsert" and not all(
-            (self.content_type, self.content_ref, self.content_hash)
-        ):
-            raise ValueError("upsert requires contentType, contentRef, and contentHash")
+        if self.operation == "upsert":
+            # Connectors deliver normalized inline content; a staged reference is the
+            # future large-binary exception. Either satisfies an upsert.
+            if not self.content_type or not (self.content or self.content_ref):
+                raise ValueError("upsert requires contentType and one of content or contentRef")
+        # When inline content and a declared hash are both present, they must agree so the
+        # durable payload cannot record a hash that does not describe its own content.
+        if self.content is not None and self.content_hash is not None:
+            digest = "sha256:" + hashlib.sha256(self.content.encode()).hexdigest()
+            if digest != self.content_hash:
+                raise ValueError("contentHash does not match content")
         return self
 
     def to_command(self) -> IngestionCommand:
@@ -106,6 +116,8 @@ class IngestionRequest(_ApiModel):
             source_acl_version=self.source_acl_version,
             idempotency_key=self.idempotency_key,
             content_type=self.content_type,
+            content=self.content,
+            title=self.title,
             content_ref=self.content_ref,
             source_url=str(self.source_url) if self.source_url else None,
             content_hash=self.content_hash,

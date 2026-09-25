@@ -36,6 +36,29 @@ def test_invalid_ingestion_example_is_rejected():
         validate(example, schema)
 
 
+def test_upsert_accepts_inline_content_or_staged_reference():
+    schema = json.loads((ROOT / "contracts/schemas/ingestion-event.schema.json").read_text())
+    base = json.loads((ROOT / "contracts/examples/ingestion-upsert.json").read_text())
+
+    inline_only = {key: value for key, value in base.items() if key != "contentHash"}
+    validate(inline_only, schema)
+
+    reference_only = {
+        key: value for key, value in base.items() if key not in {"content", "contentHash"}
+    }
+    reference_only["contentRef"] = "staged-object-01J8M0"
+    validate(reference_only, schema)
+
+    # An upsert with neither inline content nor a staged reference is rejected.
+    neither = {
+        key: value
+        for key, value in base.items()
+        if key not in {"content", "contentHash", "contentRef"}
+    }
+    with pytest.raises(ValidationError):
+        validate(neither, schema)
+
+
 def test_mcp_contract_matches_schema():
     schema = json.loads((ROOT / "contracts/mcp/context-engine-tools.schema.json").read_text())
     contract = json.loads((ROOT / "contracts/mcp/context-engine-tools.json").read_text())

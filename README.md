@@ -11,6 +11,7 @@ The repository contains the Milestone 0 architecture spike and the Milestone 1 r
 ├── contracts/                 # Provider-neutral HTTP, event, and MCP contracts
 ├── docs/                      # Plans, ADRs, threat model, and milestone evidence
 ├── engine/                    # REST API, worker, control plane, private adapter, and tests
+├── integrations/              # Ballerina source connectors and shared ingestion client
 ├── local/                     # Safe example configuration for local verification
 ├── scripts/                   # Repository policy and boundary checks
 ├── tests/                     # Cross-component contract, isolation, and recovery tests

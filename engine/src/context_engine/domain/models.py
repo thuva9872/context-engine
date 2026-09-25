@@ -71,6 +71,8 @@ class IngestionCommand:
     source_acl_version: str
     idempotency_key: str
     content_type: str | None = None
+    content: str | None = None
+    title: str | None = None
     content_ref: str | None = None
     source_url: str | None = None
     content_hash: str | None = None
@@ -92,6 +94,8 @@ class IngestionCommand:
         }
         optional = {
             "contentType": self.content_type,
+            "content": self.content,
+            "title": self.title,
             "contentRef": self.content_ref,
             "sourceUrl": self.source_url,
             "contentHash": self.content_hash,

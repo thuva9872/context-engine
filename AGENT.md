@@ -36,6 +36,7 @@ Milestone 1 has a runnable REST API and independent worker backed by a migrated 
 | `engine/src/context_engine/knowledge_backend/providers/` | Private native-provider integration and translation |
 | `engine/src/context_engine/security/` | Policy decisions and authorized partition resolution |
 | `engine/tests/` | Unit, adapter, contract, and live-provider tests |
+| `integrations/ballerina/` | Source connectors and the shared `context_engine_client` ingestion client |
 | `tests/isolation/` | Cross-audience isolation fixtures and checks |
 | `docs/decisions/` | Accepted architectural decisions |
 | `docs/m0/` | Milestone evidence, threats, and exit status |
