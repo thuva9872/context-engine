@@ -1,0 +1,30 @@
+[
+  {
+    "Id": "001A",
+    "Name": "Acme Corp",
+    "Industry": "Manufacturing",
+    "AnnualRevenue": 5000000,
+    "Owner": { "Id": "005X", "Name": "Alice Chen" },
+    "Contacts": [
+      { "Id": "003A", "Name": "Carol Diaz", "Title": "CTO", "Email": "carol@acme.com", "AccountId": "001A" },
+      { "Id": "003B", "Name": "Dan Fox", "Title": "VP Engineering", "Email": "dan@acme.com", "AccountId": "001A" }
+    ],
+    "Opportunities": [
+      { "Id": "006A", "Name": "Acme Platform Expansion", "Amount": 250000, "StageName": "Proposal", "AccountId": "001A", "OwnerId": "005X" }
+    ]
+  },
+  {
+    "Id": "001B",
+    "Name": "Globex LLC",
+    "Industry": "Logistics",
+    "AnnualRevenue": 2000000,
+    "Owner": { "Id": "005Y", "Name": "Bob Keeler" },
+    "Contacts": [
+      { "Id": "003C", "Name": "Erin Smith", "Title": "COO", "Email": "erin@globex.com", "AccountId": "001B" }
+    ],
+    "Opportunities": [
+      { "Id": "006B", "Name": "Globex Fleet Deal", "Amount": 120000, "StageName": "Negotiation", "AccountId": "001B", "OwnerId": "005Y" },
+      { "Id": "006C", "Name": "Globex Renewal", "Amount": 60000, "StageName": "Closed Won", "AccountId": "001B", "OwnerId": "005X" }
+    ]
+  }
+]

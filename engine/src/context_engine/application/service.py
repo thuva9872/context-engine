@@ -45,6 +45,10 @@ from context_engine.domain import (
     VersionOrdering,
 )
 from context_engine.ingestion.extraction import ExtractionError, extract
+from context_engine.ingestion.structured import (
+    StructuredMaterializationError,
+    validate_mapping,
+)
 from context_engine.knowledge_backend import (
     AccessPartitionRef,
     AnswerWriter,
@@ -93,6 +97,11 @@ _DELIVERY_OPERATIONS = (JobOperation.INGESTION, JobOperation.UPDATE, JobOperatio
 # Content delivered with its event is staged under the event's key in its own namespace, so
 # it never collides with a key the connector used for a separate upload.
 _DIRECT_UPLOAD_PREFIX = "event:"
+
+# Content types an RML mapping may target. Each is a structured format morph-kgc can materialize.
+_STRUCTURED_CONTENT_TYPES = frozenset(
+    {"application/json", "text/csv", "application/xml", "text/xml"}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -455,12 +464,16 @@ class ContextEngineService:
         type_: str,
         version_ordering: VersionOrdering,
         audience_mapping: dict[str, str],
+        structured_mapping: dict[str, str] | None = None,
     ) -> Source:
         """Register a source in a space for a principal that manages sources or the space.
 
         A source is the boundary for one connector feed. It fixes the space, holds the audience
         mapping and version ordering, and is the resource a connector's delivery grant points at, so
         a connector credential can only ever write into its own feed (M3, threat T02).
+
+        A structured mapping, when present, names an RML mapping per content type; records of that
+        type become graph nodes and edges instead of indexed text.
         """
 
         space = self._store.get_space(space_id)
@@ -469,11 +482,44 @@ class ContextEngineService:
         if space.state is SpaceState.DELETING:
             raise ConflictError("Space is being deleted")
         self._require_any(principal, _MANAGE_SOURCES, space_id)
+        normalized_mapping = self._validate_structured_mapping(structured_mapping)
         source = self._sources.create_source(
-            space_id, name.strip(), type_.strip(), version_ordering, audience_mapping
+            space_id,
+            name.strip(),
+            type_.strip(),
+            version_ordering,
+            audience_mapping,
+            normalized_mapping,
         )
         self._metrics.increment("context_engine_sources_registered_total")
         return source
+
+    def _validate_structured_mapping(
+        self, structured_mapping: dict[str, str] | None
+    ) -> dict[str, str] | None:
+        """Return the mapping with normalized content-type keys, rejecting unsupported ones.
+
+        The RML turtle itself is validated where it is used, under the knowledge provider, so the
+        control plane keeps no dependency on an RDF toolchain.
+        """
+
+        if not structured_mapping:
+            return None
+        normalized: dict[str, str] = {}
+        for content_type, mapping in structured_mapping.items():
+            base = content_type.split(";", 1)[0].strip().lower()
+            if base not in _STRUCTURED_CONTENT_TYPES:
+                raise ValidationError(f"Structured mapping content type is not supported: {base}")
+            if not mapping.strip():
+                raise ValidationError("Structured mapping is empty")
+            try:
+                validate_mapping(mapping)
+            except StructuredMaterializationError as exc:
+                raise ValidationError(
+                    f"Structured mapping for {base} is invalid: {exc.message}"
+                ) from exc
+            normalized[base] = mapping
+        return normalized
 
     def list_sources(self, principal: AuthenticatedPrincipal, space_id: str) -> tuple[Source, ...]:
         """List the sources of a visible space.
@@ -498,17 +544,25 @@ class ContextEngineService:
         name: str | None,
         state: SourceState | None,
         audience_mapping: dict[str, str] | None,
+        structured_mapping: dict[str, str] | None = None,
     ) -> Source:
-        """Rename, pause or resume, or remap a source.
+        """Rename, pause or resume, remap audiences, or replace the structured mapping.
 
         Needs the same management rights as registering it. Pausing stops new deliveries without
-        revoking the connector's credential or touching the source's records.
+        revoking the connector's credential or touching the source's records. A given structured
+        mapping replaces the stored one wholesale, like the audience mapping; records already
+        indexed are not re-materialized until their next version arrives.
         """
 
         self._visible_source(principal, source_id)
         self._require_any(principal, _MANAGE_SOURCES, source_id)
+        normalized_mapping = self._validate_structured_mapping(structured_mapping)
         updated = self._sources.update_source(
-            source_id, name=name, state=state, audience_mapping=audience_mapping
+            source_id,
+            name=name,
+            state=state,
+            audience_mapping=audience_mapping,
+            structured_mapping=normalized_mapping,
         )
         if updated is None:
             raise NotFoundError("Source not found")

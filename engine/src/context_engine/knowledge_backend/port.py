@@ -20,6 +20,7 @@ from .types import (
     QueryRequest,
     QueryResult,
     SourceRecord,
+    StructuredContent,
 )
 
 
@@ -46,8 +47,13 @@ class KnowledgeBackend(Protocol):
         principal: PrincipalContext,
         partition: AccessPartitionRef,
         models: ModelSelection | None = None,
+        structured: StructuredContent | None = None,
     ) -> IngestionResult:
-        """Store a new source record in one explicit access partition."""
+        """Store a new source record in one explicit access partition.
+
+        When ``structured`` is given, the record's graph is written as precise nodes and edges
+        instead of the record being indexed as text.
+        """
 
         ...
 
@@ -68,11 +74,13 @@ class KnowledgeBackend(Protocol):
         principal: PrincipalContext,
         partition: AccessPartitionRef,
         models: ModelSelection | None = None,
+        structured: StructuredContent | None = None,
     ) -> IngestionResult:
         """Replace an existing source record in its access partition.
 
         On success the new version is searchable and the previous one is not. The returned
-        reference may differ from the previous one and replaces it.
+        reference may differ from the previous one and replaces it. When ``structured`` is given,
+        the replacement is written as graph nodes and edges instead of indexed text.
         """
 
         ...

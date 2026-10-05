@@ -24,6 +24,7 @@ from .types import (
     QueryRequest,
     QueryResult,
     SourceRecord,
+    StructuredContent,
 )
 
 __all__ = [
@@ -53,4 +54,5 @@ __all__ = [
     "QueryRequest",
     "QueryResult",
     "SourceRecord",
+    "StructuredContent",
 ]

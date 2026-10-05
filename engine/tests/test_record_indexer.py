@@ -272,10 +272,10 @@ class _SpyBackend(DummyKnowledgeBackend):
             raise InjectedWorkerCrash("crash after the backend write")
         return result
 
-    async def ingest(self, record, principal, partition, models=None):
+    async def ingest(self, record, principal, partition, models=None, structured=None):
         return await self._write("ingest", record, principal, partition)
 
-    async def update(self, record, principal, partition, models=None):
+    async def update(self, record, principal, partition, models=None, structured=None):
         return await self._write("update", record, principal, partition)
 
     async def delete(self, reference, principal, partition):

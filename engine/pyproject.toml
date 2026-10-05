@@ -21,7 +21,7 @@ context-engine-serve = "context_engine.serve:main"
 context-engine-worker = "context_engine.worker.main:main"
 
 [project.optional-dependencies]
-knowledge-provider = ["cognee==1.5.4"]
+knowledge-provider = ["cognee==1.5.4", "morph-kgc==2.10.0", "rdflib==7.1.4"]
 
 [dependency-groups]
 dev = [

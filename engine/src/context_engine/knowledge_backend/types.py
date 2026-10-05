@@ -61,6 +61,19 @@ class SourceRecord:
             _required(getattr(self, name), name)
 
 
+@dataclass(frozen=True, slots=True)
+class StructuredContent:
+    """A record's structured content materialized to RDF, ready for graph-node ingestion.
+
+    Carries the ``rdflib.Graph`` that ``context_engine.ingestion.structured.materialize`` built
+    from the record's bytes and its source's RML mapping. The graph is typed ``object`` so this
+    boundary module keeps no RDF dependency. When a record's content type has a mapping, the
+    worker attaches this so the backend writes precise nodes and edges instead of indexed text.
+    """
+
+    graph: object
+
+
 @dataclass(frozen=True, slots=True, repr=False)
 class ModelSettings:
     """One model a backend call should use: provider, name, and credentials.

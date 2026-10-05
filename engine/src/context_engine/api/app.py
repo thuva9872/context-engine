@@ -357,6 +357,7 @@ def create_app(
                 body.type,
                 VersionOrdering(body.version_ordering),
                 dict(body.audience_mapping),
+                dict(body.structured_mapping) if body.structured_mapping else None,
             )
         )
 
@@ -395,6 +396,9 @@ def create_app(
                 state=SourceState(body.state) if body.state else None,
                 audience_mapping=(
                     dict(body.audience_mapping) if body.audience_mapping is not None else None
+                ),
+                structured_mapping=(
+                    dict(body.structured_mapping) if body.structured_mapping is not None else None
                 ),
             )
         )

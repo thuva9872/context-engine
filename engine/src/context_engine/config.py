@@ -66,6 +66,9 @@ class Settings:
         "text/html",
         "application/json",
         "application/pdf",
+        "text/csv",
+        "application/xml",
+        "text/xml",
     )
     # Master key that encrypts literal model keys at rest (base64url, 32 bytes). Unset means
     # the engine accepts only key references.
@@ -107,7 +110,16 @@ class Settings:
             upload_ttl_seconds=int(os.getenv("CONTEXT_ENGINE_UPLOAD_TTL_SECONDS", "86400")),
             upload_content_types=_env_list(
                 "CONTEXT_ENGINE_UPLOAD_CONTENT_TYPES",
-                ("text/plain", "text/markdown", "text/html", "application/json", "application/pdf"),
+                (
+                    "text/plain",
+                    "text/markdown",
+                    "text/html",
+                    "application/json",
+                    "application/pdf",
+                    "text/csv",
+                    "application/xml",
+                    "text/xml",
+                ),
             ),
             secrets_key=os.getenv("CONTEXT_ENGINE_SECRETS_KEY", "").strip(),
             control_plane_url=os.getenv("CONTEXT_ENGINE_CONTROL_PLANE_URL", "").strip(),

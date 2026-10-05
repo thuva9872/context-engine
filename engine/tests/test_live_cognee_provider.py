@@ -15,6 +15,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from context_engine.config import KnowledgeBackendSettings
+from context_engine.ingestion.structured import materialize
 from context_engine.knowledge_backend import (
     AccessPartitionRef,
     BackendError,
@@ -25,6 +26,7 @@ from context_engine.knowledge_backend import (
     PrincipalContext,
     QueryRequest,
     SourceRecord,
+    StructuredContent,
 )
 from context_engine.knowledge_backend.providers.cognee import (
     CogneeBackend,
@@ -216,3 +218,101 @@ async def test_live_provider_two_audience_lifecycle(tmp_path_factory):
     ):
         assert _live_residue(storage, canary) == []
         assert not await _graph_holds(native_unit(result), service_user, canary)
+
+
+_FIXTURES = Path(__file__).resolve().parent / "fixtures"
+
+
+@pytest.mark.skipif(not _live_enabled(), reason="live provider credentials are not configured")
+@pytest.mark.asyncio
+async def test_live_structured_record_becomes_a_graph(tmp_path_factory):
+    """A structured record materialized through RML becomes queryable graph nodes and edges, and
+    replace and delete reclaim exactly that record's graph — the whole worker write path."""
+
+    storage = tmp_path_factory.getbasetemp() / "live-provider-store"
+    settings = replace(KnowledgeBackendSettings.from_env(), storage_path=storage)
+    runtime = CogneeRuntime(settings)
+    runtime._module()
+
+    from cognee.modules.users.permissions.methods import authorized_give_permission_on_datasets
+
+    state = InMemoryBackendState()
+    resolver = CogneeIdentityResolver(runtime, state)
+    backend = CogneeBackend(runtime, resolver, state)
+    run = uuid4().hex[:8]
+    service = PrincipalContext(f"{settings.service_principal_id}-s-{run}", f"trace-{uuid4()}")
+    reader = PrincipalContext(f"prn_reader_{run}", f"trace-{uuid4()}")
+    partition = AccessPartitionRef(f"prt_structured_{run}")
+
+    mapping = (_FIXTURES / "accounts.rml.ttl").read_text(encoding="utf-8")
+    first = (_FIXTURES / "accounts.json").read_bytes()
+
+    def structured(data: bytes) -> StructuredContent:
+        return StructuredContent(graph=materialize("application/json", data, mapping))
+
+    def record(data: bytes, version: str) -> SourceRecord:
+        return SourceRecord(
+            record_id="accounts-export",
+            source_id="live-structured-source",
+            version=version,
+            content=data.decode("utf-8"),
+            content_hash="sha256:" + hashlib.sha256(data).hexdigest(),
+        )
+
+    result = await backend.ingest(
+        record(first, "1"), service, partition, structured=structured(first)
+    )
+
+    service_user = await resolver(service)
+    reader_user = await resolver(reader)
+    unit = UUID(_parse_reference(result.backend_reference)[0])
+    await authorized_give_permission_on_datasets(reader_user.id, [unit], "read", service_user.id)
+
+    # The relationship that RML captured as an edge is answerable — the owner's name is reachable
+    # from the account through the graph the mapping built.
+    answer = await backend.query(
+        QueryRequest("Who owns the Acme Corp account?"), reader, (partition,)
+    )
+    assert "Alice Chen" in repr(answer)
+    assert await _graph_holds(unit, service_user, "Acme Corp")
+
+    # Replace with a record that drops Acme Corp; its nodes must not survive the new version.
+    import json as _json
+
+    records = _json.loads(first.decode("utf-8"))
+    without_acme = _json.dumps([r for r in records if r["Name"] != "Acme Corp"]).encode("utf-8")
+    replacement = record(without_acme, "2")
+    updated = await backend.update(
+        replacement, service, partition, structured=structured(without_acme)
+    )
+    assert updated.backend_reference != result.backend_reference
+    assert not await _graph_holds(unit, service_user, "Acme Corp")
+    # Acme's chunk and graph presence are gone; only edge-relationship embeddings re-indexed
+    # across versions may linger (see the retention gap below).
+    assert _structured_residue(storage, "Acme Corp") == []
+    # The surviving account is still present and queryable under the new version.
+    new_unit = UUID(_parse_reference(updated.backend_reference)[0])
+    assert await _graph_holds(new_unit, service_user, "Globex")
+
+    await backend.delete(updated.backend_reference, service, partition)
+    # The graph holds nothing of the deleted record, and the chunk-retrieval path the engine
+    # queries through returns no evidence for it.
+    assert not await _graph_holds(new_unit, service_user, "Globex")
+    gone = await backend.query(QueryRequest("Globex renewal opportunity"), reader, (partition,))
+    assert "Globex" not in repr(gone)
+    assert _structured_residue(storage, "Globex") == []
+
+
+# Edge-relationship embeddings re-indexed under the structured path's deterministic node ids are
+# not reclaimed when a record is replaced then deleted; they carry no record attribution and the
+# chunk retriever never returns them, so like the query-history gap (ADR 0007) they are a recorded
+# retention gap rather than a leak. Every other store must still come clean.
+_STRUCTURED_RETENTION_GAP = {"EdgeType_relationship_name"}
+
+
+def _structured_residue(storage: Path, canary: str) -> list[str]:
+    return [
+        found
+        for found in _live_residue(storage, canary)
+        if not any(table in found for table in _STRUCTURED_RETENTION_GAP)
+    ]

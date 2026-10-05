@@ -40,6 +40,7 @@ from ..types import (
     QueryRequest,
     QueryResult,
     SourceRecord,
+    StructuredContent,
 )
 
 
@@ -67,6 +68,18 @@ class _CogneeRuntimePort(Protocol):
         models: ModelSelection | None = None,
     ) -> _NativeIngestion:
         """Invoke native ingestion with the selected models and return native identifiers."""
+
+        ...
+
+    async def remember_datapoints(
+        self,
+        record: SourceRecord,
+        binding: _CogneeBinding,
+        user: Any,
+        graph: Any,
+        models: ModelSelection | None = None,
+    ) -> _NativeIngestion:
+        """Register one record and write its RDF graph as owned nodes and edges."""
 
         ...
 
@@ -290,15 +303,25 @@ class CogneeBackend:
         principal: PrincipalContext,
         partition: AccessPartitionRef,
         models: ModelSelection | None = None,
+        structured: StructuredContent | None = None,
     ) -> IngestionResult:
-        """Translate and ingest one engine record in an explicit partition."""
+        """Translate and ingest one engine record in an explicit partition.
+
+        A structured record is written as graph nodes and edges from its materialized RDF; an
+        ordinary record is indexed as text. Both pin the same native item id and return the same
+        kind of reference, so the engine tracks and reconciles them identically.
+        """
 
         self._partitions((partition,))
         try:
             user = await self._user_resolver(principal)
-            result = await self._runtime.remember(
-                record, self._bindings.resolve(partition), user, models
-            )
+            binding = self._bindings.resolve(partition)
+            if structured is not None:
+                result = await self._runtime.remember_datapoints(
+                    record, binding, user, structured.graph, models
+                )
+            else:
+                result = await self._runtime.remember(record, binding, user, models)
             self._bindings.set_dataset_id(partition, result.dataset_id)
             reference = _native_reference(result.dataset_id, result.data_id)
             self._state.put_record_reference(
@@ -404,6 +427,7 @@ class CogneeBackend:
         principal: PrincipalContext,
         partition: AccessPartitionRef,
         models: ModelSelection | None = None,
+        structured: StructuredContent | None = None,
     ) -> IngestionResult:
         """Update a previously bound engine record."""
 
@@ -420,8 +444,14 @@ class CogneeBackend:
         try:
             user = await self._user_resolver(principal)
             # Replace rather than edit in place: the new item carries the new version in its
-            # metadata, which evidence lineage and progress rely on (ADR 0007).
-            result = await self._runtime.remember(record, binding, user, models)
+            # metadata, which evidence lineage and progress rely on (ADR 0007). The old item's
+            # nodes and edges are owned by its data id, so forgetting it below reclaims them.
+            if structured is not None:
+                result = await self._runtime.remember_datapoints(
+                    record, binding, user, structured.graph, models
+                )
+            else:
+                result = await self._runtime.remember(record, binding, user, models)
             if result.dataset_id != binding.dataset_id:
                 raise BackendError(
                     BackendErrorCode.PARTIAL_WRITE,
@@ -758,6 +788,82 @@ class CogneeRuntime:
             raise BackendError(
                 BackendErrorCode.PARTIAL_WRITE, "Provider did not confirm the written item"
             )
+        return _NativeIngestion(str(dataset_id), str(item_id), created=True)
+
+    async def remember_datapoints(
+        self,
+        record: SourceRecord,
+        binding: _CogneeBinding,
+        user: Any,
+        graph: Any,
+        models: ModelSelection | None = None,
+    ) -> _NativeIngestion:
+        """Register one record, then write its RDF graph as nodes and edges it owns.
+
+        The record is registered as a native content item (so listing and progress see it), but
+        native graph extraction is skipped: the graph comes from the record's structure, not a
+        model. Every node and edge is stamped with the item's dataset and data id, so a later
+        update or delete reclaims exactly this record's graph through the same `forget` the text
+        path uses. Node ids are namespaced by the binding, so a foreign-key reference lands on its
+        target node and two partitions never share identity.
+        """
+
+        cognee = await self._ready()
+        from cognee.modules.data.methods.get_authorized_dataset import get_authorized_dataset
+        from cognee.modules.pipelines.models import PipelineContext
+        from cognee.tasks.ingestion.data_item import DataItem
+        from cognee.tasks.storage.add_data_points import add_data_points
+
+        from .rml_adapter import rdf_to_datapoints
+
+        item_id = _native_item_id(binding, record)
+        native_record = DataItem(
+            data=_RecordUpload(record.content),
+            data_id=item_id,
+            label=record.title,
+            external_metadata={
+                "record_id": record.record_id,
+                "source_id": record.source_id,
+                "source_version": record.version,
+                "content_hash": record.content_hash,
+                **dict(record.attributes),
+            },
+        )
+        add_kwargs: dict[str, Any] = {
+            "data": native_record,
+            "dataset_name": binding.dataset_name,
+            "user": user,
+            "run_in_background": False,
+        }
+        if binding.dataset_id:
+            add_kwargs["dataset_id"] = UUID(binding.dataset_id)
+        add_kwargs.update(_native_model_kwargs(models))
+        result = await cognee.add(**add_kwargs)
+        if getattr(result, "status", "") == "PipelineRunErrored":
+            raise BackendError(BackendErrorCode.PARTIAL_WRITE, "Provider ingestion failed")
+        dataset_id = getattr(result, "dataset_id", None)
+        if not dataset_id:
+            raise BackendError(
+                BackendErrorCode.UNSUPPORTED,
+                "Provider did not return a stable isolation identifier",
+            )
+        dataset = await get_authorized_dataset(user, UUID(str(dataset_id)), "write")
+        if dataset is None:
+            raise BackendError(BackendErrorCode.PARTIAL_WRITE, "Provider did not bind the dataset")
+        # The binding's native dataset name namespaces node ids: stable for this partition and
+        # distinct from every other, so identical source IRIs never collide across datasets. The
+        # item id is the record's document id, so retrieval attributes its chunks back to it.
+        datapoints, edges = rdf_to_datapoints(graph, binding.dataset_name, item_id)
+        ctx = PipelineContext(
+            user=user,
+            data_item=native_record,
+            dataset=dataset,
+            pipeline_run_id=getattr(result, "pipeline_run_id", None),
+        )
+        # The space's embedding model indexes the chunks the adapter emits for retrieval; native
+        # graph extraction never runs, so no language model is called here.
+        with _native_model_context(models):
+            await add_data_points(datapoints, custom_edges=edges, ctx=ctx)
         return _NativeIngestion(str(dataset_id), str(item_id), created=True)
 
     async def recall(
@@ -1204,6 +1310,7 @@ def assert_runtime_matches_pinned_sdk(runtime: CogneeRuntime | None = None) -> N
     cognee = (runtime or CogneeRuntime())._module()
     required = {
         "remember": {"data", "dataset_name", "dataset_id", "self_improvement", "chunk_size"},
+        "add": {"data", "dataset_name", "dataset_id", "user"},
         "recall": {
             "query_text",
             "query_type",
@@ -1293,3 +1400,17 @@ def assert_runtime_matches_pinned_sdk(runtime: CogneeRuntime | None = None) -> N
             raise RuntimeError(
                 f"Pinned provider {operation} signature is missing {sorted(missing)}"
             )
+    # The structured path writes graph nodes directly and scopes them to the record's dataset and
+    # data id through a pipeline context, so a drift in any of these breaks per-record ownership.
+    from cognee.modules.data.methods.get_authorized_dataset import get_authorized_dataset
+    from cognee.modules.pipelines.models import PipelineContext
+    from cognee.tasks.storage.add_data_points import add_data_points
+
+    add_points_params = set(inspect.signature(add_data_points).parameters)
+    if not {"data_points", "custom_edges", "ctx"} <= add_points_params:
+        raise RuntimeError("Pinned provider no longer takes datapoints with a pipeline context")
+    context_fields = set(getattr(PipelineContext, "__dataclass_fields__", {}))
+    if not {"user", "data_item", "dataset"} <= context_fields:
+        raise RuntimeError("Pinned provider pipeline context no longer carries the owning item")
+    if not {"user", "permission_type"} <= set(inspect.signature(get_authorized_dataset).parameters):
+        raise RuntimeError("Pinned provider no longer resolves an authorized dataset")

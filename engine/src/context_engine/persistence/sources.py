@@ -43,6 +43,8 @@ def _timestamp(value: datetime | None = None) -> str:
 
 def _source(row: Row) -> Source:
     mapping = json.loads(row["audience_mapping_json"])
+    structured_raw = row["structured_mapping_json"]
+    structured = json.loads(structured_raw) if structured_raw else {}
     return Source(
         id=row["id"],
         space_id=row["space_id"],
@@ -53,6 +55,9 @@ def _source(row: Row) -> Source:
         audience_mapping=tuple(sorted((str(key), str(value)) for key, value in mapping.items())),
         created_at=datetime.fromisoformat(row["created_at"]),
         updated_at=datetime.fromisoformat(row["updated_at"]),
+        structured_mapping=tuple(
+            sorted((str(key), str(value)) for key, value in structured.items())
+        ),
     )
 
 
@@ -170,6 +175,7 @@ class SourceRepository:
         type_: str,
         version_ordering: VersionOrdering,
         audience_mapping: dict[str, str],
+        structured_mapping: dict[str, str] | None = None,
     ) -> Source:
         """Register a ready source inside a context space."""
 
@@ -180,8 +186,8 @@ class SourceRepository:
                 """
                 INSERT INTO sources(
                     id, space_id, name, type, state, version_ordering, audience_mapping_json,
-                    created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    created_at, updated_at, structured_mapping_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     source_id,
@@ -193,6 +199,9 @@ class SourceRepository:
                     json.dumps(audience_mapping, sort_keys=True, separators=(",", ":")),
                     now,
                     now,
+                    json.dumps(structured_mapping, sort_keys=True, separators=(",", ":"))
+                    if structured_mapping
+                    else None,
                 ),
             )
             row = connection.execute("SELECT * FROM sources WHERE id = ?", (source_id,)).fetchone()
@@ -221,8 +230,9 @@ class SourceRepository:
         name: str | None = None,
         state: SourceState | None = None,
         audience_mapping: dict[str, str] | None = None,
+        structured_mapping: dict[str, str] | None = None,
     ) -> Source | None:
-        """Change a source's name, delivery state, or audience mapping."""
+        """Change a source's name, delivery state, audience mapping, or structured mapping."""
 
         with self.database.transaction() as connection:
             row = connection.execute("SELECT * FROM sources WHERE id = ?", (source_id,)).fetchone()
@@ -230,7 +240,8 @@ class SourceRepository:
                 return None
             connection.execute(
                 """
-                UPDATE sources SET name = ?, state = ?, audience_mapping_json = ?, updated_at = ?
+                UPDATE sources SET name = ?, state = ?, audience_mapping_json = ?,
+                    structured_mapping_json = ?, updated_at = ?
                 WHERE id = ?
                 """,
                 (
@@ -239,6 +250,9 @@ class SourceRepository:
                     json.dumps(audience_mapping, sort_keys=True, separators=(",", ":"))
                     if audience_mapping is not None
                     else row["audience_mapping_json"],
+                    json.dumps(structured_mapping, sort_keys=True, separators=(",", ":"))
+                    if structured_mapping is not None
+                    else row["structured_mapping_json"],
                     _timestamp(),
                     source_id,
                 ),

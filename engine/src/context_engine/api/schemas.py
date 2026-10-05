@@ -427,10 +427,13 @@ class GrantResponse(_ApiModel):
 
 _MappingKey = Annotated[str, Field(min_length=1, max_length=300)]
 _MappingValue = Annotated[str, Field(min_length=1, max_length=300)]
+# An RML mapping is a Turtle document, so it is bounded far more generously than a tag mapping.
+_RmlKey = Annotated[str, Field(min_length=1, max_length=100)]
+_RmlValue = Annotated[str, Field(min_length=1, max_length=100_000)]
 
 
 class RegisterSourceRequest(_ApiModel):
-    """Validate a source registration; the audience mapping is write-only configuration."""
+    """Validate a source registration; the mappings are write-only configuration."""
 
     name: Annotated[str, Field(min_length=1, max_length=120)]
     type: Annotated[str, Field(min_length=1, max_length=60)]
@@ -440,6 +443,10 @@ class RegisterSourceRequest(_ApiModel):
     version_ordering: Literal["numeric", "lexicographic"] = Field(
         default="numeric", alias="versionOrdering"
     )
+    # RML mappings keyed by content type; a record of that type becomes graph nodes and edges.
+    structured_mapping: Annotated[
+        dict[_RmlKey, _RmlValue] | None, Field(max_length=50)
+    ] = Field(default=None, alias="structuredMapping")
 
 
 class UpdateSourceRequest(_ApiModel):
@@ -450,12 +457,20 @@ class UpdateSourceRequest(_ApiModel):
     audience_mapping: Annotated[dict[_MappingKey, _MappingValue] | None, Field(max_length=500)] = (
         Field(default=None, alias="audienceMapping")
     )
+    structured_mapping: Annotated[
+        dict[_RmlKey, _RmlValue] | None, Field(max_length=50)
+    ] = Field(default=None, alias="structuredMapping")
 
     @model_validator(mode="after")
     def require_a_change(self) -> UpdateSourceRequest:
         """Reject an empty update."""
 
-        if self.name is None and self.state is None and self.audience_mapping is None:
+        if (
+            self.name is None
+            and self.state is None
+            and self.audience_mapping is None
+            and self.structured_mapping is None
+        ):
             raise ValueError("at least one field is required")
         return self
 

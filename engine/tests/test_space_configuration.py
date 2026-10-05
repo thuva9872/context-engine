@@ -57,11 +57,11 @@ class RecordingBackend(DummyKnowledgeBackend):
         super().__init__()
         self.seen = []
 
-    async def ingest(self, record, principal, partition, models=None):
+    async def ingest(self, record, principal, partition, models=None, structured=None):
         self.seen.append(("ingest", models))
         return await super().ingest(record, principal, partition, models=models)
 
-    async def update(self, record, principal, partition, models=None):
+    async def update(self, record, principal, partition, models=None, structured=None):
         self.seen.append(("update", models))
         return await super().update(record, principal, partition, models=models)
 

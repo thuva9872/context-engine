@@ -79,6 +79,84 @@ def _setup(client: TestClient):
     return space, source
 
 
+def test_source_registration_validates_structured_mapping(tmp_path):
+    with _client(tmp_path) as client:
+        space = client.post("/v1/spaces", headers=_auth(ADMIN), json={"name": "Ops"}).json()
+        body = {
+            "name": "Accounts",
+            "type": "salesforce",
+            "audienceMapping": {"source-group:research": "research"},
+        }
+
+        good = client.post(
+            f"/v1/spaces/{space['id']}/sources",
+            headers=_auth(ADMIN),
+            json={
+                **body,
+                "structuredMapping": {
+                    "application/json": "@prefix ex: <http://example.org/> .\nex:s ex:p ex:o .",
+                },
+            },
+        )
+        assert good.status_code == 201, good.text
+
+        unsupported = client.post(
+            f"/v1/spaces/{space['id']}/sources",
+            headers=_auth(ADMIN),
+            json={**body, "structuredMapping": {"application/pdf": "@prefix ex: <x> ."}},
+        )
+        assert unsupported.status_code == 400, unsupported.text
+
+        malformed = client.post(
+            f"/v1/spaces/{space['id']}/sources",
+            headers=_auth(ADMIN),
+            json={
+                **body,
+                "structuredMapping": {"application/json": "@prefix ex: <http://e/> .\nex:s ex:p"},
+            },
+        )
+        assert malformed.status_code == 400, malformed.text
+
+
+def test_source_structured_mapping_can_be_updated(tmp_path):
+    turtle_v1 = "@prefix ex: <http://example.org/> .\nex:s ex:p ex:o ."
+    turtle_v2 = "@prefix ex: <http://example.org/> .\nex:a ex:b ex:c ."
+    with _client(tmp_path) as client:
+        space = client.post("/v1/spaces", headers=_auth(ADMIN), json={"name": "Ops"}).json()
+        created = client.post(
+            f"/v1/spaces/{space['id']}/sources",
+            headers=_auth(ADMIN),
+            json={
+                "name": "Accounts",
+                "type": "salesforce",
+                "audienceMapping": {"source-group:research": "research"},
+                "structuredMapping": {"application/json": turtle_v1},
+            },
+        )
+        assert created.status_code == 201, created.text
+        source_id = created.json()["id"]
+
+        # Only the structured mapping changes, so the partial update must accept it alone.
+        replaced = client.patch(
+            f"/v1/sources/{source_id}",
+            headers=_auth(ADMIN),
+            json={"structuredMapping": {"application/json": turtle_v2, "text/csv": turtle_v1}},
+        )
+        assert replaced.status_code == 200, replaced.text
+
+        malformed = client.patch(
+            f"/v1/sources/{source_id}",
+            headers=_auth(ADMIN),
+            json={"structuredMapping": {"application/json": "@prefix ex: <x> .\nex:s ex:p"}},
+        )
+        assert malformed.status_code == 400, malformed.text
+
+    # The stored mapping is the replacement, wholesale, and the malformed update changed nothing.
+    sources = SourceRepository(ControlDatabase(tmp_path / "control.db", MIGRATIONS))
+    stored = dict(sources.get_source(source_id).structured_mapping)
+    assert stored == {"application/json": turtle_v2, "text/csv": turtle_v1}
+
+
 def test_source_registration_visibility_and_pausing(tmp_path):
     with _client(tmp_path) as client:
         space = client.post("/v1/spaces", headers=_auth(ADMIN), json={"name": "Ops"}).json()

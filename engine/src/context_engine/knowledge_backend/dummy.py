@@ -24,6 +24,7 @@ from .types import (
     QueryRequest,
     QueryResult,
     SourceRecord,
+    StructuredContent,
 )
 
 
@@ -103,6 +104,7 @@ class DummyKnowledgeBackend:
         principal: PrincipalContext,
         partition: AccessPartitionRef,
         models: ModelSelection | None = None,
+        structured: StructuredContent | None = None,
     ) -> IngestionResult:
         """Store or idempotently replay a partition-scoped record."""
 
@@ -135,6 +137,7 @@ class DummyKnowledgeBackend:
         principal: PrincipalContext,
         partition: AccessPartitionRef,
         models: ModelSelection | None = None,
+        structured: StructuredContent | None = None,
     ) -> IngestionResult:
         """Replace a record only with an acceptable source version."""
 

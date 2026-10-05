@@ -201,6 +201,9 @@ class Source:
     audience_mapping: tuple[tuple[str, str], ...]
     created_at: datetime
     updated_at: datetime
+    # RML mappings (RDF Mapping Language, Turtle) keyed by content type. A record whose content
+    # type is present here becomes graph nodes and edges via its mapping instead of indexed text.
+    structured_mapping: tuple[tuple[str, str], ...] = ()
 
     def version_key(self, version: str) -> tuple[int, int | str]:
         """Return a comparable key for a version string under this source's ordering."""
@@ -219,6 +222,12 @@ class Source:
         mapped = sorted({mapping[tag] for tag in tags if tag in mapping})
         unmapped = sorted({tag for tag in tags if tag not in mapping})
         return tuple(mapped), tuple(unmapped)
+
+    def mapping_for(self, content_type: str) -> str | None:
+        """Return the RML mapping for a content type, ignoring any charset parameter."""
+
+        base = content_type.split(";", 1)[0].strip().lower()
+        return dict(self.structured_mapping).get(base)
 
 
 @dataclass(frozen=True, slots=True)

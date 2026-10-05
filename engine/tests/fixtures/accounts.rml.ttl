@@ -1,0 +1,137 @@
+@prefix rr:   <http://www.w3.org/ns/r2rml#> .
+@prefix rml:  <http://semweb.mmlab.be/ns/rml#> .
+@prefix ql:   <http://semweb.mmlab.be/ns/ql#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix ex:   <http://example.org/> .
+
+# TriplesMap for Account
+<#AccountMap> a rr:TriplesMap ;
+  rml:logicalSource [
+    rml:source "SF" ;
+    rml:referenceFormulation ql:JSONPath ;
+    rml:iterator "$[*]"
+  ] ;
+  rr:subjectMap [
+    rr:template "http://example.org/account/{Id}" ;
+    rr:class ex:Account
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate rdfs:label ;
+    rr:objectMap [ rml:reference "Name" ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:industry ;
+    rr:objectMap [ rml:reference "Industry" ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:annual_revenue ;
+    rr:objectMap [ rml:reference "AnnualRevenue" ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:owned_by ;
+    rr:objectMap [
+      rr:template "http://example.org/user/{Owner.Id}" ;
+      rr:termType rr:IRI
+    ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:is_a ;
+    rr:objectMap [ rr:constant ex:Organization ; rr:termType rr:IRI ]
+  ] .
+
+# TriplesMap for User (Owner)
+<#UserMap> a rr:TriplesMap ;
+  rml:logicalSource [
+    rml:source "SF" ;
+    rml:referenceFormulation ql:JSONPath ;
+    rml:iterator "$[*].Owner"
+  ] ;
+  rr:subjectMap [
+    rr:template "http://example.org/user/{Id}" ;
+    rr:class ex:User
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate rdfs:label ;
+    rr:objectMap [ rml:reference "Name" ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:is_a ;
+    rr:objectMap [ rr:constant ex:Person ; rr:termType rr:IRI ]
+  ] .
+
+# TriplesMap for Contact
+<#ContactMap> a rr:TriplesMap ;
+  rml:logicalSource [
+    rml:source "SF" ;
+    rml:referenceFormulation ql:JSONPath ;
+    rml:iterator "$[*].Contacts[*]"
+  ] ;
+  rr:subjectMap [
+    rr:template "http://example.org/contact/{Id}" ;
+    rr:class ex:Contact
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate rdfs:label ;
+    rr:objectMap [ rml:reference "Name" ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:title ;
+    rr:objectMap [ rml:reference "Title" ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:email ;
+    rr:objectMap [ rml:reference "Email" ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:works_for ;
+    rr:objectMap [
+      rr:template "http://example.org/account/{AccountId}" ;
+      rr:termType rr:IRI
+    ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:is_a ;
+    rr:objectMap [ rr:constant ex:Person ; rr:termType rr:IRI ]
+  ] .
+
+# TriplesMap for Opportunity
+<#OpportunityMap> a rr:TriplesMap ;
+  rml:logicalSource [
+    rml:source "SF" ;
+    rml:referenceFormulation ql:JSONPath ;
+    rml:iterator "$[*].Opportunities[*]"
+  ] ;
+  rr:subjectMap [
+    rr:template "http://example.org/opportunity/{Id}" ;
+    rr:class ex:Opportunity
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate rdfs:label ;
+    rr:objectMap [ rml:reference "Name" ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:amount ;
+    rr:objectMap [ rml:reference "Amount" ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:stage_name ;
+    rr:objectMap [ rml:reference "StageName" ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:for_account ;
+    rr:objectMap [
+      rr:template "http://example.org/account/{AccountId}" ;
+      rr:termType rr:IRI
+    ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:owned_by ;
+    rr:objectMap [
+      rr:template "http://example.org/user/{OwnerId}" ;
+      rr:termType rr:IRI
+    ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:is_a ;
+    rr:objectMap [ rr:constant ex:Deal ; rr:termType rr:IRI ]
+  ] .

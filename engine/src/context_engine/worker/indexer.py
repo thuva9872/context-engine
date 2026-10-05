@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Awaitable, Callable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
 from context_engine.domain import (
     IndexState,
@@ -21,7 +21,11 @@ from context_engine.domain import (
     RecordStatus,
     Source,
 )
-from context_engine.ingestion.extraction import ExtractedText, ExtractionError, extract
+from context_engine.ingestion.extraction import ExtractionError, extract
+from context_engine.ingestion.structured import (
+    StructuredMaterializationError,
+    materialize,
+)
 from context_engine.knowledge_backend import (
     AccessPartitionRef,
     BackendError,
@@ -33,6 +37,7 @@ from context_engine.knowledge_backend import (
     ModelSelection,
     PrincipalContext,
     SourceRecord,
+    StructuredContent,
 )
 from context_engine.observability import MetricsRegistry, get_logger, log_event
 from context_engine.persistence import SourceRepository, StagingStore
@@ -54,6 +59,20 @@ class _Failure(Exception):
         self.code = code
         self.message = message
         self.state = state
+
+
+@dataclass(frozen=True, slots=True)
+class _Prepared:
+    """One version's content ready to write: indexed text, or a materialized graph.
+
+    ``structured`` is set when the record's content type has an RML mapping; the backend then
+    writes its graph instead of indexing ``content`` as text. ``content`` still carries the
+    record's text (the raw structured bytes for the graph path) so the backend keeps provenance.
+    """
+
+    content: str
+    parser_version: str
+    structured: StructuredContent | None
 
 
 class RecordIndexer:
@@ -239,7 +258,7 @@ class RecordIndexer:
             )
             return
         try:
-            extracted = self._content(record)
+            prepared = self._prepare(source, record)
         except _Failure:
             # The current version cannot be indexed, so no older copy may stay searchable.
             for location in locations:
@@ -250,7 +269,7 @@ class RecordIndexer:
             record_id=record.source_record_id,
             source_id=source.id,
             version=record.current_version,
-            content=extracted.text,
+            content=prepared.content,
             content_hash=record.content_hash or "",
             source_url=record.source_url,
             attributes=(("space_id", source.space_id),),
@@ -267,11 +286,13 @@ class RecordIndexer:
         try:
             if replacing:
                 result = await self._backend.update(
-                    backend_record, principal, partition, models=models
+                    backend_record, principal, partition, models=models,
+                    structured=prepared.structured,
                 )
             else:
                 result = await self._backend.ingest(
-                    backend_record, principal, partition, models=models
+                    backend_record, principal, partition, models=models,
+                    structured=prepared.structured,
                 )
         except BackendError as exc:
             self._handle_write_error(source, record, partition_id, exc)
@@ -284,7 +305,7 @@ class RecordIndexer:
             record.current_version,
             result.backend_reference.value,
             record.content_hash or "",
-            extracted.parser_version,
+            prepared.parser_version,
         )
         self._metrics.increment("context_engine_index_writes_total")
         if (
@@ -393,8 +414,13 @@ class RecordIndexer:
         )
         return progress.missing == 1
 
-    def _content(self, record: RecordStatus) -> ExtractedText:
-        """Read and verify the current version's staged bytes, then extract its text."""
+    def _prepare(self, source: Source, record: RecordStatus) -> _Prepared:
+        """Read and verify the staged bytes, then produce text or a materialized graph.
+
+        A content type the source registered an RML mapping for is materialized to a graph; every
+        other type is extracted to text. A bad mapping or unextractable content is a record-level
+        failure, so the caller removes any older copy rather than leave it searchable.
+        """
 
         upload = self._sources.get_upload(record.content_ref) if record.content_ref else None
         if upload is None:
@@ -406,7 +432,23 @@ class RecordIndexer:
         # Bytes are checked again at execution time, not only when the event was accepted.
         if "sha256:" + hashlib.sha256(data).hexdigest() != record.content_hash:
             raise _Failure("content_mismatch", "Staged content no longer matches its hash")
+
+        mapping = source.mapping_for(upload.content_type)
+        if mapping is not None:
+            try:
+                graph = materialize(upload.content_type, data, mapping)
+            except StructuredMaterializationError as exc:
+                raise _Failure(exc.code, exc.message) from exc
+            # The structured bytes are the provenance text; the graph carries the nodes and edges.
+            return _Prepared(
+                content=data.decode("utf-8", errors="replace"),
+                parser_version="rml@1",
+                structured=StructuredContent(graph=graph),
+            )
         try:
-            return extract(upload.content_type, data)
+            extracted = extract(upload.content_type, data)
         except ExtractionError as exc:
             raise _Failure(exc.code, exc.message) from exc
+        return _Prepared(
+            content=extracted.text, parser_version=extracted.parser_version, structured=None
+        )
