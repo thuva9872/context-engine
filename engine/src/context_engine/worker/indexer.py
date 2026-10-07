@@ -20,6 +20,7 @@ from context_engine.domain import (
     RecordState,
     RecordStatus,
     Source,
+    StagedUpload,
 )
 from context_engine.ingestion.extraction import ExtractionError, extract
 from context_engine.ingestion.structured import (
@@ -435,20 +436,54 @@ class RecordIndexer:
 
         mapping = source.mapping_for(upload.content_type)
         if mapping is not None:
+            reason: str | None = None
             try:
                 graph = materialize(upload.content_type, data, mapping)
+                if len(graph) > 0:
+                    # The structured bytes are the provenance text; the graph carries the nodes.
+                    return _Prepared(
+                        content=data.decode("utf-8", errors="replace"),
+                        parser_version="rml@1",
+                        structured=StructuredContent(graph=graph),
+                    )
+                # No triples: the record lacks the fields the subject needs, or the mapping does
+                # not match its shape.
+                reason = "structured_materialization_empty"
             except StructuredMaterializationError as exc:
-                raise _Failure(exc.code, exc.message) from exc
-            # The structured bytes are the provenance text; the graph carries the nodes and edges.
-            return _Prepared(
-                content=data.decode("utf-8", errors="replace"),
-                parser_version="rml@1",
-                structured=StructuredContent(graph=graph),
+                reason = exc.code
+            # The mapping produced no usable graph for this record. Rather than lose it, fall
+            # through to the text path so it is still indexed; the fallback is logged and counted
+            # so a mapping that fails for every record stays visible.
+            log_event(
+                logger,
+                "structured_materialization_fell_back",
+                source_id=source.id,
+                record_id=record.source_record_id,
+                reason=reason,
             )
+            self._metrics.increment("context_engine_structured_fallback_total")
+            return self._as_text(upload, data, allow_plain_fallback=True)
+        return self._as_text(upload, data, allow_plain_fallback=False)
+
+    def _as_text(
+        self, upload: StagedUpload, data: bytes, *, allow_plain_fallback: bool
+    ) -> _Prepared:
+        """Extract staged bytes to text for the text path, as a mappingless source or RML fallback.
+
+        On the structured fallback a content type the text path cannot parse (CSV, XML) is read as
+        plain text, so a structured record is indexed rather than dropped when its mapping yields
+        nothing. Any extraction failure is a record-level failure, as on the ordinary text path.
+        """
+
         try:
             extracted = extract(upload.content_type, data)
         except ExtractionError as exc:
-            raise _Failure(exc.code, exc.message) from exc
+            if not (allow_plain_fallback and exc.code == "extraction_unsupported"):
+                raise _Failure(exc.code, exc.message) from exc
+            try:
+                extracted = extract("text/plain", data)
+            except ExtractionError as plain_exc:
+                raise _Failure(plain_exc.code, plain_exc.message) from plain_exc
         return _Prepared(
             content=extracted.text, parser_version=extracted.parser_version, structured=None
         )

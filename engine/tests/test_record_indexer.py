@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from importlib.util import find_spec
 from itertools import count
 from pathlib import Path
 
@@ -33,6 +34,9 @@ from context_engine.worker import (
     TerminalJobError,
 )
 
+_HAS_RDF = find_spec("morph_kgc") is not None and find_spec("rdflib") is not None
+requires_rdf = pytest.mark.skipif(not _HAS_RDF, reason="morph-kgc/rdflib are not installed")
+
 MIGRATIONS = Path(__file__).resolve().parents[1] / "migrations"
 SERVICE_ID = "context-engine-service"
 READER = PrincipalContext("prn_reader", "trace-read")
@@ -44,7 +48,7 @@ OPERATIONS = {
 
 
 class _Harness:
-    def __init__(self, tmp_path, backend=None, *, indexed=True):
+    def __init__(self, tmp_path, backend=None, *, indexed=True, structured_mapping=None):
         database = ControlDatabase(tmp_path / "control.db", MIGRATIONS)
         database.migrate()
         self.repository = ControlPlaneRepository(database)
@@ -52,7 +56,12 @@ class _Harness:
         self.staging = StagingStore(tmp_path / "staging")
         self.space = self.repository.create_space("Ops", None)
         self.source = self.sources.create_source(
-            self.space.id, "Files", "file", VersionOrdering.NUMERIC, {"t": "team", "u": "ops"}
+            self.space.id,
+            "Files",
+            "file",
+            VersionOrdering.NUMERIC,
+            {"t": "team", "u": "ops"},
+            structured_mapping,
         )
         self.backend = backend or DummyKnowledgeBackend()
         self.bound: list[str] = []
@@ -232,6 +241,37 @@ async def test_unindexable_version_fails_and_leaves_nothing_older_searchable(tmp
     assert (record.index_state, record.index_error) == (IndexState.FAILED, "extraction_unsupported")
     assert harness.locations("doc-a") == ()
     assert await harness.found("oldword", "team") == []
+
+
+# A mapping that keys the subject on an "Id" field; a record without it materializes to nothing.
+_RML_NEEDS_ID = (
+    "@prefix rr: <http://www.w3.org/ns/r2rml#> .\n"
+    "@prefix rml: <http://semweb.mmlab.be/ns/rml#> .\n"
+    "@prefix ql: <http://semweb.mmlab.be/ns/ql#> .\n"
+    "@prefix ex: <http://example.org/> .\n"
+    "<#M> a rr:TriplesMap ;\n"
+    '  rml:logicalSource [ rml:source "x" ; rml:referenceFormulation ql:JSONPath ;'
+    ' rml:iterator "$" ] ;\n'
+    '  rr:subjectMap [ rr:template "http://example.org/a/{Id}" ; rr:class ex:A ] ;\n'
+    '  rr:predicateObjectMap [ rr:predicate ex:v ; rr:objectMap [ rml:reference "v" ] ] .\n'
+)
+
+
+@requires_rdf
+async def test_structured_record_with_no_triples_falls_back_to_text(tmp_path):
+    # A structured record whose mapping yields no triples (here, no Id to key the subject) is not
+    # lost: it falls through to the text path so it is still indexed and searchable, rather than
+    # failing or landing as an unretrievable empty node.
+    harness = _Harness(tmp_path, structured_mapping={"application/json": _RML_NEEDS_ID})
+
+    await harness.deliver(
+        "row-a", "1", content=b'{"Name": "NoIdHere"}', content_type="application/json"
+    )
+
+    record = harness.record("row-a")
+    assert record.index_state is IndexState.INDEXED
+    assert record.index_error is None
+    assert await harness.found("NoIdHere", "team") == [("row-a", "1")]
 
 
 async def test_tampered_staged_bytes_are_refused(tmp_path):
